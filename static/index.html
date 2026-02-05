@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Seedling v2</title>
+    <style>
+        body { font-family: sans-serif; }
+        #chat-container { width: 500px; margin: 0 auto; }
+        #chat-history { height: 400px; border: 1px solid #ccc; padding: 10px; overflow-y: scroll; }
+        .user-message { text-align: right; }
+        .assistant-message { text-align: left; }
+    </style>
+</head>
+<body>
+    <div id="chat-container">
+        <div id="chat-history"></div>
+        <input type="text" id="user-input" placeholder="Ask a question...">
+        <button id="send-button">Send</button>
+    </div>
+
+    <script>
+        document.getElementById('send-button').addEventListener('click', sendMessage);
+        document.getElementById('user-input').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        function sendMessage() {
+            const userInput = document.getElementById('user-input');
+            const prompt = userInput.value;
+            if (!prompt) return;
+
+            appendMessage('user', prompt);
+            userInput.value = '';
+
+            fetch('/ask', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ prompt: prompt })
+            })
+            .then(response => response.json())
+            .then(data => {
+                appendMessage('assistant', data.synthesized_answer);
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                appendMessage('assistant', 'Sorry, something went wrong.');
+            });
+        }
+
+        function appendMessage(sender, message) {
+            const chatHistory = document.getElementById('chat-history');
+            const messageElement = document.createElement('div');
+            messageElement.classList.add(sender + '-message');
+            messageElement.innerText = message;
+            chatHistory.appendChild(messageElement);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+# Environments
+.env
+.venv
+
+# Python
+__pycache__/
+*.pyc
+
+# Firebase
+service-account.json
+firebase-debug.log
