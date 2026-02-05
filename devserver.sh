@@ -1,3 +1,3 @@
 #!/bin/sh
 source .venv/bin/activate
-python app_flask.py
+streamlit run streamlit_app.py --server.port 8080
