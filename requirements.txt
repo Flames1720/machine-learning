@@ -1,22 +1,22 @@
-# Core UI and Database
+# -- Core Frameworks
 streamlit>=1.35.0
 firebase-admin>=6.5.0
-
-# AI and Logic
-google-genai>=1.62.0
-groq>=1.0.0
-spacy>=3.8.0
-
-# Vector Memory
-chromadb>=1.4.1
-sentence-transformers>=3.0.0
-torch>=2.4.0
-
-# Search and Background Tasks
-ddgs>=9.10.0
-APScheduler>=3.11.0
 python-dotenv>=1.0.1
 
-# Utilities
-nltk>=3.9.0
-requests>=2.31.0
+# -- AI & NLP
+# Pinned to avoid breaking changes in major versions
+google-generativeai>=0.5.0,<1.0.0
+groq>=0.5.0,<1.0.0
+spacy>=3.7.0,<4.0.0
+# Direct link to specific spaCy model for reliable deployment
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
+
+# -- Vector Database
+# chromadb handles its own sentence-transformer and onnx dependencies
+chromadb>=0.4.0,<0.5.0
+
+# -- Other Utilities
+ddgs-search>=5.0.0,<6.0.0
+APScheduler>=3.10.0,<4.0.0
+requests>=2.31.0,<3.0.0
+nltk>=3.8.0,<4.0.0

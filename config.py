@@ -40,8 +40,8 @@ class Config:
 
     # --- AI Model Specifications ---
     # Defines the specific models to be used with the AI services.
-    GEMINI_MODEL: str = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
-    GROQ_MODEL: str = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
+    GEMINI_MODEL: str = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-latest")
+    GROQ_MODEL: str = os.environ.get("GROQ_MODEL", "llama3-8b-8192")
     
     # --- Firebase Configuration ---
     # Retrieves the full Firebase credentials JSON from an environment variable.
@@ -54,6 +54,11 @@ class Config:
     # --- Vector Database ---
     # Specifies the directory to persist ChromaDB data.
     CHROMA_PERSIST_DIRECTORY: str = os.environ.get("CHROMA_PERSIST_DIRECTORY", "db/chroma")
+    
+    # --- Remote settings for deployment (e.g., Streamlit Cloud) ---
+    CHROMA_HOST: str | None = os.environ.get("CHROMA_HOST")
+    CHROMA_PORT: int | None = int(os.environ.get("CHROMA_PORT")) if os.environ.get("CHROMA_PORT") else None
+
     CHROMA_EMBEDDING_MODEL: str = os.environ.get("CHROMA_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
     CHROMA_COLLECTION_NAME: str = os.environ.get("CHROMA_COLLECTION_NAME", "knowledge_base")
 
