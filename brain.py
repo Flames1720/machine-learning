@@ -7,8 +7,9 @@ from ai_providers import generate_text
 import streamlit as st
 from firebase_admin import credentials, firestore
 import json
-from typing import Set, List
+from typing import Set, List, Dict
 from difflib import SequenceMatcher
+from datetime import datetime
 
 # Get a logger
 logger = logging.getLogger(__name__)
@@ -259,8 +260,90 @@ def learn_unknowns_from_response(response_text: str, query_context: str = "") ->
         return False
 
 
+def search_web_and_learn(query: str) -> Dict:
+    """Search web for information about a query using Groq.
+    
+    Args:
+        query: User's question or topic
+    
+    Returns:
+        Dictionary with web search results and learned facts
+    """
+    try:
+        from ai_providers import generate_text
+        
+        search_prompt = (
+            f"Based on your knowledge, provide 3-5 key facts about: {query}\n"
+            f"Format as JSON: {{\"facts\": [\"fact1\", \"fact2\", ...], \"sources\": [\"source1\", ...]}}"
+        )
+        
+        result = generate_text(search_prompt, prefer=('groq', 'gemini'))
+        
+        try:
+            web_data = json.loads(result)
+            logger.info(f"Learned {len(web_data.get('facts', []))} facts from web search")
+            return web_data
+        except json.JSONDecodeError:
+            logger.debug("Could not parse web search result as JSON")
+            return {"facts": [result], "sources": ["groq"]}
+    
+    except Exception as e:
+        logger.error(f"Error searching web: {e}")
+        return {}
+
+
+def refine_knowledge_entry(topic: str, knowledge_data: Dict) -> bool:
+    """Refine an existing knowledge entry with better details.
+    
+    Args:
+        topic: The topic to refine
+        knowledge_data: Current knowledge dictionary
+    
+    Returns:
+        True if refinement succeeded
+    """
+    if not db:
+        return False
+    
+    try:
+        from ai_providers import generate_text
+        
+        current_def = knowledge_data.get('definition', '')
+        current_facts = knowledge_data.get('facts', [])
+        
+        refinement_prompt = (
+            f"Current definition of '{topic}': {current_def}\n\n"
+            f"Current facts: {', '.join(current_facts[:3])}\n\n"
+            f"Improve and expand this definition with more detail, nuance, and accuracy.\n"
+            f"Return improved JSON: {{\"definition\": \"...\", \"facts\": [...]}}"
+        )
+        
+        result = generate_text(refinement_prompt, prefer=('groq', 'gemini'))
+        
+        try:
+            refined = json.loads(result)
+            updated_knowledge = knowledge_data.copy()
+            updated_knowledge['definition'] = refined.get('definition', updated_knowledge['definition'])
+            updated_knowledge['facts'] = refined.get('facts', updated_knowledge.get('facts', []))
+            updated_knowledge['refined_at'] = datetime.now().isoformat()
+            
+            # Store refined knowledge
+            doc_ref = db.collection('solidified_knowledge').document(topic)
+            doc_ref.set(updated_knowledge, merge=True)
+            
+            logger.info(f"Refined knowledge for: {topic}")
+            return True
+        except json.JSONDecodeError:
+            logger.debug("Could not parse refinement result")
+            return False
+    
+    except Exception as e:
+        logger.error(f"Error refining knowledge for {topic}: {e}")
+        return False
+
+
 def regenerate_response_with_learning(user_query: str, original_response: str, conversation_context=None) -> str:
-    """Regenerate a response after learning unknown terms.
+    """Regenerate a response after learning unknown terms or from web search.
     
     Args:
         user_query: Original user question
@@ -276,8 +359,7 @@ def regenerate_response_with_learning(user_query: str, original_response: str, c
         regeneration_prompt = (
             f"The user asked: {user_query}\n\n"
             f"I previously responded: {original_response[:300]}\n\n"
-            f"But I realize I may have missed some important context. "
-            f"Rethink and provide a more complete, accurate answer based on everything I know."
+            f"Rethink this question completely and provide a more accurate, complete, and well-researched answer."
         )
         
         improved = generate_text(regeneration_prompt, prefer=('groq', 'gemini'))

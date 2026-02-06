@@ -1,12 +1,29 @@
 import streamlit as st
 import time
 import logging
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="Project Seedling v2", layout="centered")
 st.title("Project Seedling v2")
+
+# Add background learning status in sidebar header
+st.sidebar.markdown("---")
+st.sidebar.write("🧠 **Background Learning Status**")
+try:
+    from background_learner import _learning_tasks, _refinement_timers
+    if _learning_tasks:
+        learning_count = len(_learning_tasks)
+        st.sidebar.info(f"Learning {learning_count} topic(s) in background...")
+        for topic, task in list(_learning_tasks.items())[:3]:
+            status_icon = "⚙️" if task["status"] == "pending" else "✅" if task["status"] == "refined" else "❌"
+            st.sidebar.caption(f"{status_icon} {topic[:30]}")
+    else:
+        st.sidebar.caption("✅ All caught up!")
+except Exception as e:
+    logger.debug(f"Could not load background tasks: {e}")
 
 # Debug mode - show if services are online
 show_debug = st.secrets.get("DEBUG_MODE", False) if hasattr(st, "secrets") else False
@@ -132,11 +149,17 @@ if prompt := st.chat_input("Ask a question..."):
         st.markdown(prompt)
 
     # 4. Lazy-load the brain ONLY when needed
+    thinking_placeholder = st.empty()
+    response_placeholder = st.empty()
+    
     with st.chat_message("assistant"):
-        with st.spinner("Checking knowledge base..."):
+        # Show thinking state
+        thinking_placeholder.markdown("🧠 _Thinking..._")
+        
+        with st.spinner("Processing your question..."):
             try:
                 # We import here so the app loads even if brain.py has issues
-                from brain import generate_response_from_knowledge, db, nlp
+                from brain import generate_response_from_knowledge, db, nlp, extract_unknown_words
                 
                 # Check services
                 if not db or not nlp:
@@ -148,68 +171,113 @@ if prompt := st.chat_input("Ask a question..."):
                     for msg in st.session_state.messages[:-1]  # Exclude current user message
                 ]
                 
+                # Generate response
                 response_data = generate_response_from_knowledge(
                     prompt, 
                     conversation_context=conversation_context
                 )
                 answer = response_data.get("synthesized_answer")
+                
+                # Clear thinking state and show response
+                thinking_placeholder.empty()
+                
+                # Immediately learn from this response (background, non-blocking)
+                try:
+                    from brain import learn_unknowns_from_response
+                    # Fire and forget - learn asynchronously
+                    unknowns = extract_unknown_words(answer)
+                    if unknowns:
+                        import threading
+                        learn_thread = threading.Thread(
+                            target=learn_unknowns_from_response,
+                            args=(answer, prompt),
+                            daemon=True
+                        )
+                        learn_thread.start()
+                except Exception as e:
+                    logger.debug(f"Background learning error: {e}")
+                
             except Exception as e:
                 logger.error(f"Error in generate_response: {e}", exc_info=True)
+                thinking_placeholder.empty()
                 answer = f"⚠️ Error: {str(e)[:200]}"
 
         if answer:
-            st.markdown(answer)
-            st.session_state.messages.append({"role": "assistant", "content": answer, "feedback": None})
+            response_placeholder.markdown(answer)
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": answer, 
+                "feedback": None,
+                "recovery_active": False,
+                "recovery_task": None
+            })
             
             # Add feedback buttons for new response
             cols = st.columns([1, 0.1, 0.1])
+            with cols[0]:
+                # Show recovery status if active
+                if message.get("recovery_active"):
+                    recovery_task = message.get("recovery_task", {})
+                    status = recovery_task.get("status", "pending")
+                    attempts = recovery_task.get("attempts", 0)
+                    max_attempts = recovery_task.get("max_attempts", 3)
+                    
+                    if status == "pending":
+                        st.info(f"🔄 Recovery in progress... (attempt {attempts}/{max_attempts})")
+                    elif status == "recovered":
+                        improved = recovery_task.get("improved_response", answer)
+                        if improved != answer:
+                            st.warning("✨ I found a better answer! Review above. Mark correct if better.")
+                            st.session_state.messages[-1]["content"] = improved
+                            st.rerun()
+                    elif status == "failed":
+                        st.error(f"❌ Recovery failed after {max_attempts} attempts")
+            
             with cols[1]:
                 if st.button("✓", key=f"feedback_correct_{len(st.session_state.messages)-1}", help="Response was correct"):
-                    st.toast("Thanks for the feedback! ✓", icon="✅")
+                    st.toast("✅ Response marked correct!", icon="✅")
                     st.session_state.messages[-1]["feedback"] = "correct"
-            with cols[2]:
-                if st.button("✗", key=f"feedback_wrong_{len(st.session_state.messages)-1}", help="Response was wrong"):
-                    st.toast("Learning from incorrect response...", icon="🧠")
-                    st.session_state.messages[-1]["feedback"] = "wrong"
                     
-                    # Intelligent learning: extract unknowns and learn with Groq
+                    # Schedule background refinement (every 5 minutes)
                     try:
-                        from brain import learn_unknowns_from_response, regenerate_response_with_learning, db
+                        from background_learner import schedule_refinement_task
+                        from brain import db
                         
                         if db:
-                            # Step 1: Learn unknown words from the response
-                            logger.info(f"Starting intelligent learning for: {prompt[:50]}...")
-                            learned = learn_unknowns_from_response(answer, query_context=prompt)
+                            # Get or fetch knowledge for this topic
+                            topic = prompt.split()[0].lower()  # Simple topic extraction
                             
-                            if learned:
-                                st.toast("✅ Learned new concepts!", icon="📚")
-                                
-                                # Step 2: Regenerate response with new knowledge
-                                improved_answer = regenerate_response_with_learning(
-                                    prompt, 
-                                    answer,
-                                    conversation_context=conversation_context
-                                )
-                                
-                                if improved_answer != answer:
-                                    st.toast("✨ Regenerated improved response!", icon="✨")
-                                    st.session_state.messages[-1]["content"] = improved_answer
-                                    st.session_state.messages[-1]["improved"] = True
-                                    st.rerun()
-                            
-                            # Step 3: Store feedback for future reference
-                            feedback_ref = db.collection('feedback').document(f"wrong_{len(st.session_state.messages)-1}_{int(time.time())}")
-                            feedback_ref.set({
-                                "type": "incorrect_response",
-                                "user_query": prompt,
-                                "ai_response": answer,
-                                "learned_unknowns": learned,
-                                "timestamp": time.time()
-                            })
-                            logger.info(f"Stored incorrect response feedback with learning data")
+                            # Schedule continuous refinement
+                            schedule_refinement_task(topic, answer, {"definition": answer})
+                            st.toast("📚 Scheduled continuous learning in background", icon="📚")
+                            logger.info(f"Scheduled refinement task for: {topic}")
+                    
                     except Exception as e:
-                        logger.error(f"Error during intelligent learning: {e}", exc_info=True)
-                        st.toast("⚠️ Learning encountered an issue", icon="⚠️")
+                        logger.debug(f"Could not schedule refinement: {e}")
+                    
+                    # Clear recovery status
+                    st.session_state.messages[-1]["recovery_active"] = False
+            with cols[2]:
+                if st.button("✗", key=f"feedback_wrong_{len(st.session_state.messages)-1}", help="Response was wrong"):
+                    st.toast("🔍 Searching web & rethinking...", icon="🧠")
+                    st.session_state.messages[-1]["feedback"] = "wrong"
+                    st.session_state.messages[-1]["recovery_active"] = True
+                    
+                    # Schedule recovery task: web search + Groq + rethink
+                    try:
+                        from background_learner import schedule_recovery_task
+                        recovery_task = schedule_recovery_task(prompt, answer, max_attempts=3)
+                        st.session_state.messages[-1]["recovery_task"] = recovery_task
+                        
+                        logger.info(f"Started recovery task for: {prompt[:50]}...")
+                        st.toast("⏳ Recovery in progress... I'll update when ready", icon="⏳")
+                        
+                        # Rerun to show status
+                        st.rerun()
+                    
+                    except Exception as e:
+                        logger.error(f"Error scheduling recovery: {e}", exc_info=True)
+                        st.toast("⚠️ Recovery could not start", icon="⚠️")
         else:
             msg = "I don't have a response. Please try again."
             st.markdown(msg)
