@@ -39,17 +39,23 @@ def initialize_firebase():
     try:
         # Prefer environment variable for local/testing use, then Streamlit secrets
         firebase_creds_json = os.environ.get('FIREBASE_CREDENTIALS')
-        if firebase_creds_json:
-            creds_dict = json.loads(firebase_creds_json)
-        else:
+        if not firebase_creds_json:
             try:
-                firebase_creds_json = st.secrets.get("FIREBASE_CREDENTIALS")
-            except Exception:
+                # Try to access secrets in Streamlit environment
+                if hasattr(st, 'secrets'):
+                    firebase_creds_json = st.secrets.get("FIREBASE_CREDENTIALS")
+            except Exception as e:
+                logger.debug(f"Could not access st.secrets: {e}")
                 firebase_creds_json = None
-            if firebase_creds_json:
-                creds_dict = json.loads(firebase_creds_json)
-            else:
-                raise RuntimeError("FIREBASE_CREDENTIALS not found in env or Streamlit secrets")
+        
+        if not firebase_creds_json:
+            raise RuntimeError("FIREBASE_CREDENTIALS not found in environment variables or Streamlit secrets")
+        
+        # Parse credentials
+        try:
+            creds_dict = json.loads(firebase_creds_json)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"FIREBASE_CREDENTIALS is not valid JSON: {e}")
         
         # Avoid re-initializing the app
         if not firebase_admin._apps:
@@ -63,7 +69,7 @@ def initialize_firebase():
         return db
     except Exception as e:
         logger.critical(f"FIREBASE INITIALIZATION FAILED: {e}", exc_info=True)
-        logger.warning("Database features will be disabled.")
+        logger.warning("Database features will be disabled. Core services will be offline.")
         return None
 
 db = initialize_firebase()
@@ -74,9 +80,12 @@ try:
     gemini_api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
     if not gemini_api_key:
         try:
-            gemini_api_key = st.secrets.get("GEMINI_API_KEY")
-        except Exception:
+            if hasattr(st, 'secrets'):
+                gemini_api_key = st.secrets.get("GEMINI_API_KEY")
+        except Exception as e:
+            logger.debug(f"Could not access GEMINI_API_KEY from st.secrets: {e}")
             gemini_api_key = None
+    
     if gemini_api_key:
         # Try multiple ways to make the gemini API key available to the
         # installed `google.genai` package. Different releases expose
@@ -110,6 +119,25 @@ except KeyError:
 except Exception as e:
     logger.error(f"An unexpected error occurred during Gemini configuration: {e}")
     gemini_api_key = None
+
+
+def get_health_status():
+    """Returns a dictionary showing the health status of all services."""
+    return {
+        "firebase": {
+            "online": db is not None,
+            "error": "Not initialized" if db is None else None
+        },
+        "spacy": {
+            "online": nlp is not None,
+            "error": "Model not loaded" if nlp is None else None
+        },
+        "gemini": {
+            "configured": bool(gemini_api_key),
+            "error": "API key not found" if not gemini_api_key else None
+        },
+        "all_services": db is not None and nlp is not None
+    }
 
 
 def detect_and_log_unknown_words(text):
