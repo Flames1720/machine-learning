@@ -13,11 +13,15 @@ def groq_generate_text(system_prompt: str, user_prompt: str) -> str:
     """Placeholder for Groq text generation."""
     logger.info(f"(Placeholder) Generating text with Groq with system prompt: {system_prompt} and user prompt: {user_prompt}")
     if "extract related topics" in system_prompt.lower():
-        return '{"topics": ["related topic 1", "related topic 2"]}'
+        return '{\"topics\": [\"related topic 1\", \"related topic 2\"]}'
     return "This is a placeholder response from Groq."
 
 def generate_response_from_knowledge(prompt_text: str, conversation_context: List = None) -> Dict:
-    """Generates a response by querying the knowledge base and synthesizing an answer."""
+    """
+    Generates a response by querying the knowledge base.
+    If a strong match is found, it returns the stored knowledge directly.
+    Otherwise, it indicates that it needs to learn.
+    """
     response_data = {
         "raw_knowledge": None,
         "synthesized_answer": "I am currently unable to process this request as my core services are offline.",
@@ -28,23 +32,27 @@ def generate_response_from_knowledge(prompt_text: str, conversation_context: Lis
     if not health['all_services_ok']:
         return response_data
 
-    similar_concepts = query_similar(prompt_text, n_results=5)
-    
-    knowledge_entries = []
-    if similar_concepts:
-        for concept in similar_concepts:
-            doc_ref = db.collection('solidified_knowledge').document(concept)
-            doc = doc_ref.get()
-            if doc.exists:
-                knowledge_entries.append(doc.to_dict())
+    # Query for the single most similar concept
+    similar_concepts = query_similar(prompt_text, n_results=1)
 
-    if knowledge_entries:
-        system_prompt = "You are a helpful assistant. Based on the provided knowledge, answer the user's question."
-        user_prompt = f"User Question: {prompt_text}\n\nKnowledge: {knowledge_entries}"
-        synthesized_answer = groq_generate_text(system_prompt, user_prompt)
-        response_data['synthesized_answer'] = synthesized_answer
-        response_data['raw_knowledge'] = knowledge_entries
+    if similar_concepts:
+        top_concept = similar_concepts[0]
+        # The 'score' is a distance metric, so lower is better.
+        # Let's use a threshold to determine if it's a good match.
+        similarity_score = top_concept.get('score', 1.0)
+        
+        # This threshold may need tuning.
+        if similarity_score < 0.6:
+            # Found a good match, use the document directly as the answer.
+            answer = top_concept.get('document')
+            response_data['synthesized_answer'] = answer
+            response_data['raw_knowledge'] = [top_concept]
+        else:
+            # Match is not strong enough
+            response_data['synthesized_answer'] = "I don't have enough information to answer that question. I will try to learn about it."
+            detect_and_log_unknown_words(prompt_text)
     else:
+        # No concepts found
         response_data['synthesized_answer'] = "I don't have enough information to answer that question. I will try to learn about it."
         detect_and_log_unknown_words(prompt_text)
 

@@ -51,6 +51,12 @@ class Config:
     # Specifies the spaCy model for Natural Language Processing tasks.
     SPACY_MODEL: str = "en_core_web_sm"
 
+    # --- Vector Database ---
+    # Specifies the directory to persist ChromaDB data.
+    CHROMA_PERSIST_DIRECTORY: str = os.environ.get("CHROMA_PERSIST_DIRECTORY", "db/chroma")
+    CHROMA_EMBEDDING_MODEL: str = os.environ.get("CHROMA_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+    CHROMA_COLLECTION_NAME: str = os.environ.get("CHROMA_COLLECTION_NAME", "knowledge_base")
+
 # --- Global Configuration Instance ---
 # A single, immutable instance of the Config class that is imported by other modules.
 # This singleton pattern ensures that configuration is consistent across the application.

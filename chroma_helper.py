@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 
 try:
     import chromadb
-    from chromadb.config import Settings
     from chromadb.utils import embedding_functions
     CHROMADB_AVAILABLE = True
 except ImportError:
@@ -34,8 +33,8 @@ def init_chroma():
 
     if _client is None:
         try:
-            settings = Settings(chroma_db_impl="duckdb+parquet", persist_directory=APP_CONFIG.CHROMA_PERSIST_DIRECTORY)
-            _client = chromadb.Client(settings)
+            # New, simplified client initialization for persistent storage
+            _client = chromadb.PersistentClient(path=APP_CONFIG.CHROMA_PERSIST_DIRECTORY)
             logger.info("ChromaDB client initialized.")
         except Exception as e:
             logger.error(f"Failed to init Chroma client: {e}")
@@ -43,10 +42,12 @@ def init_chroma():
 
     if _collection is None:
         try:
+            # The embedding function logic remains the same
             if embedding_functions and hasattr(embedding_functions, "SentenceTransformerEmbeddingFunction"):
                 ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=APP_CONFIG.CHROMA_EMBEDDING_MODEL)
             else:
                 ef = None
+            
             _collection = _client.get_or_create_collection(name=APP_CONFIG.CHROMA_COLLECTION_NAME, embedding_function=ef)
             logger.info(f"Chroma collection '{APP_CONFIG.CHROMA_COLLECTION_NAME}' ready.")
         except Exception as e:
@@ -55,7 +56,6 @@ def init_chroma():
 
     return _collection
 
-# ... (the rest of your chroma_helper.py functions remain the same)
 def upsert_knowledge(id: str, text: str, metadata: Optional[Dict] = None):
     """Upsert a single knowledge item into Chroma collection.
 
@@ -69,19 +69,18 @@ def upsert_knowledge(id: str, text: str, metadata: Optional[Dict] = None):
             init_chroma()
         if _collection is None:
             return False
+            
         _collection.upsert(ids=[id], documents=[text], metadatas=[metadata or {}])
         logger.debug(f"Upserted into chroma: {id}")
-        # Persist where applicable
-        try:
-            _client.persist()
-        except Exception:
-            pass
+        
+        # With PersistentClient, changes are automatically persisted.
+        # The explicit _client.persist() call is no longer needed.
+        
         return True
     except Exception as e:
         logger.error(f"Chroma upsert error for {id}: {e}")
         return False
-
-
+        
 def query_similar(text: str, n_results: int = 5):
     """Query chroma for similar documents to provided text.
 
@@ -93,16 +92,16 @@ def query_similar(text: str, n_results: int = 5):
         if _collection is None:
             return []
         results = _collection.query(query_texts=[text], n_results=n_results)
+        
         docs = []
-        for ids, docs_list, metas, distances in zip(results.get('ids', []), results.get('documents', []), results.get('metadatas', []), results.get('distances', [])):
-            # results come back as lists of lists
-            for i, did in enumerate(ids):
-                docs.append({
-                    'id': did,
-                    'document': docs_list[i] if docs_list else None,
-                    'metadata': metas[i] if metas else {},
-                    'score': distances[i] if distances else None
-                })
+        # results come back as lists of lists because the input is a list
+        for i in range(len(results.get('ids', [[]])[0])):
+            docs.append({
+                'id': results['ids'][0][i],
+                'document': results['documents'][0][i],
+                'metadata': results['metadatas'][0][i],
+                'score': results['distances'][0][i]
+            })
         return docs
     except Exception as e:
         logger.error(f"Chroma query error: {e}")

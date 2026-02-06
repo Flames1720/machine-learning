@@ -3,7 +3,8 @@ import logging
 import json
 import firebase_admin
 from firebase_admin import credentials, firestore
-import google.generativeai as genai  # Corrected import
+import google.generativeai as genai
+from google.generativeai import types
 from groq import Groq
 import spacy
 
@@ -40,20 +41,18 @@ def _initialize_firebase():
         logger.critical(f"Firebase initialization failed: {e}", exc_info=True)
         return None
 
-def _initialize_gemini():
-    """Initializes the Google Gemini client with the configured API key."""
+def _configure_gemini():
+    """Configures the Google GenAI library with the API key."""
     try:
         if not APP_CONFIG.GEMINI_API_KEY:
             raise ValueError("GEMINI_API_KEY not found in config.")
-
-        # Correct Initialization for google.generativeai library
+        
         genai.configure(api_key=APP_CONFIG.GEMINI_API_KEY)
-        model = genai.GenerativeModel(APP_CONFIG.GEMINI_MODEL)
-        logger.info(f"Google Gemini API client initialized successfully with {APP_CONFIG.GEMINI_MODEL}.")
-        return model
+        logger.info("Google GenAI library configured successfully.")
+        return True
     except Exception as e:
-        logger.error(f"Failed to initialize Gemini client: {e}", exc_info=True)
-        return None
+        logger.error(f"Failed to configure GenAI library: {e}", exc_info=True)
+        return False
 
 def _initialize_groq():
     """Initializes the Groq API client."""
@@ -86,16 +85,55 @@ def _load_spacy_model():
 
 # --- Initialize and Expose Services ---
 db = _initialize_firebase()
-gemini = _initialize_gemini()
+gemini_configured = _configure_gemini()
 groq_client = _initialize_groq()
 nlp = _load_spacy_model()
+
+
+# --- Gemini Helper with Persona ---
+def generate_structured_gemini_content(contents: any) -> str:
+    """
+    Generates content using the configured Gemini library and applies
+    the 'Logic-Mapping Architect' system instructions on each call.
+    """
+    if not gemini_configured:
+        logger.error("Gemini library not configured, cannot generate content.")
+        return '{"error": "Gemini library not configured."}'
+
+    architect_instructions = """
+    You are the 'Logic-Mapping Architect' for a recursive AI brain. 
+    Your goal is to organize messy information into a clean visual structure.
+
+    RULES:
+    1. Every piece of information must be a 'Block'.
+    2. If two Blocks are related, you must create a 'Thread' between their 'Nobs'.
+    3. You must group smaller Blocks into larger 'Containers' (Groups).
+    4. Your output must always be valid JSON so the Vercel website can render it.
+    5. Always prioritize 'Spatial Logic'—place related items physically close to each other.
+    """
+
+    try:
+        # Correct Method: Instantiate the model directly
+        model = genai.GenerativeModel(
+            model_name=APP_CONFIG.GEMINI_MODEL,
+            system_instruction=architect_instructions,
+            generation_config=types.GenerationConfig(
+                temperature=0.2
+            )
+        )
+        
+        response = model.generate_content(contents)
+        return response.text
+    except Exception as e:
+        logger.error(f"Error during Gemini content generation: {e}", exc_info=True)
+        return f'{{"error": "Failed to generate content: {e}"}}'
 
 # --- Health Check --- 
 def get_health_status():
     """Returns a dictionary with the status of all initialized services."""
     health = {
         "firebase": {"online": db is not None},
-        "gemini": {"configured": gemini is not None},
+        "gemini": {"configured": gemini_configured},
         "groq": {"configured": groq_client is not None},
         "spacy": {"online": nlp is not None}
     }
