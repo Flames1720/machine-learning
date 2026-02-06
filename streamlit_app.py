@@ -237,8 +237,8 @@ if prompt := st.chat_input("Ask a question..."):
             cols = st.columns([1, 0.1, 0.1])
             with cols[0]:
                 # Show recovery status if active
-                if message.get("recovery_active"):
-                    recovery_task = message.get("recovery_task", {})
+                if st.session_state.messages[-1].get("recovery_active"):
+                    recovery_task = st.session_state.messages[-1].get("recovery_task", {})
                     status = recovery_task.get("status", "pending")
                     attempts = recovery_task.get("attempts", 0)
                     max_attempts = recovery_task.get("max_attempts", 3)
