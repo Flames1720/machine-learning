@@ -2,5 +2,5 @@ streamlit
 firebase-admin
 python-dotenv
 spacy
-google-generativeai
+google-genai
 flask

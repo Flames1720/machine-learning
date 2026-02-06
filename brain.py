@@ -2,53 +2,70 @@ import os
 import spacy
 import logging
 import firebase_admin
-# I am using google.generativeai as instructed, though the deprecation warning will appear.
-import google.generativeai as genai 
+import google.genai as genai
+import streamlit as st
 from firebase_admin import credentials, firestore
-from dotenv import load_dotenv
 import json
 
-# Load environment variables and get a logger
-load_dotenv()
+# Get a logger
 logger = logging.getLogger(__name__)
 
 # --- Load Models and Services ---
-try:
-    nlp = spacy.load("en_core_web_sm")
-    logger.info("spaCy model loaded.")
-except Exception as e:
-    logger.critical(f"Failed to load spaCy model: {e}", exc_info=True)
-    nlp = None
+# Note: These will only be loaded once due to Streamlit's caching mechanism.
 
-# --- Firebase Initialization ---
-db = None
-if not firebase_admin._apps:
+@st.cache_resource
+def load_spacy_model():
+    """Loads the spaCy model and caches it."""
     try:
-        logger.info("Initializing Firebase Admin SDK...")
-        firebase_creds_json = os.environ.get('FIREBASE_CREDENTIALS')
-        if not firebase_creds_json:
-            raise ValueError("The FIREBASE_CREDENTIALS environment variable is not set.")
+        nlp = spacy.load("en_core_web_sm")
+        logger.info("spaCy model loaded.")
+        return nlp
+    except Exception as e:
+        logger.critical(f"Failed to load spaCy model: {e}", exc_info=True)
+        return None
+
+nlp = load_spacy_model()
+
+@st.cache_resource
+def initialize_firebase():
+    """Initializes Firebase Admin SDK and caches the client."""
+    db = None
+    try:
+        firebase_creds_json = st.secrets["FIREBASE_CREDENTIALS"]
         creds_dict = json.loads(firebase_creds_json)
-        cred = credentials.Certificate(creds_dict)
-        project_id = creds_dict.get('project_id')
-        firebase_admin.initialize_app(cred, {'projectId': project_id})
+        
+        # Avoid re-initializing the app
+        if not firebase_admin._apps:
+            logger.info("Initializing Firebase Admin SDK...")
+            cred = credentials.Certificate(creds_dict)
+            project_id = creds_dict.get('project_id')
+            firebase_admin.initialize_app(cred, {'projectId': project_id})
+        
         db = firestore.client()
         logger.info("Firebase initialization successful.")
+        return db
     except Exception as e:
-        db = None
         logger.critical(f"FIREBASE INITIALIZATION FAILED: {e}", exc_info=True)
         logger.warning("Database features will be disabled.")
-else:
-    db = firestore.client()
-    logger.info("Firebase app already initialized.")
+        return None
 
-# --- Gemini Configuration ---
-gemini_api_key = os.environ.get("GEMINI_API_KEY")
-if gemini_api_key:
-    genai.configure(api_key=gemini_api_key)
-    logger.info("Gemini API key found and configured.")
-else:
-    logger.warning("GEMINI_API_KEY not found. Response generation will be limited.")
+db = initialize_firebase()
+
+# --- Configure Gemini API ---
+try:
+    gemini_api_key = st.secrets["GEMINI_API_KEY"]
+    if gemini_api_key:
+        genai.configure(api_key=gemini_api_key)
+        logger.info("Gemini API key found and configured.")
+    else:
+        logger.warning("GEMINI_API_KEY not found in Streamlit secrets. Response generation will be limited.")
+except KeyError:
+    logger.warning("GEMINI_API_KEY not found in Streamlit secrets.")
+    gemini_api_key = None
+except Exception as e:
+    logger.error(f"An unexpected error occurred during Gemini configuration: {e}")
+    gemini_api_key = None
+
 
 def detect_and_log_unknown_words(text):
     logger.info(f"Detecting unknown words in text: '{text[:50]}...'")
@@ -93,21 +110,19 @@ def generate_response_from_knowledge(prompt_text):
                 definition = knowledge.get('definition', '')
                 retrieved_knowledge += f"- Fact about {concept}: {definition}\n"
     
-    # If no knowledge is found, return None to trigger the learning flow in the UI.
     if not retrieved_knowledge:
         logger.info("No relevant information found in my knowledge base. Triggering learning flow.")
-        return response_data # synthesized_answer is still None here
+        return response_data
 
     response_data["raw_knowledge"] = retrieved_knowledge
 
-    # If knowledge IS found, use the "Teacher" Gemini call to synthesize an answer.
     if not gemini_api_key:
         response_data["synthesized_answer"] = f"I don't have a complete thought on that yet, but here is the raw information I found:\n\n{retrieved_knowledge}"
         return response_data
 
     try:
         logger.info("Knowledge found. Engaging Teacher Mode...")
-        model = genai.GenerativeModel('gemini-2.5-flash-lite')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         synthesis_prompt = (
             f"Based *only* on the following facts from my internal knowledge base, "
@@ -125,22 +140,14 @@ def generate_response_from_knowledge(prompt_text):
     return response_data
 
 if __name__ == "__main__":
+    # This block is for local testing only and won't run in Streamlit
     logging.basicConfig(level=logging.INFO)
-    logger.info("Running brain.py directly for testing...")
-    
-    # Test Case 1: No knowledge exists (should trigger learning)
-    test_prompt_unknown = "What is Schrodinger's Cat?"
-    print(f"\n--- TEST CASE 1: UNKNOWN KNOWLEDGE ---")
-    print(f"Sending test prompt: '{test_prompt_unknown}'\n")
-    response = generate_response_from_knowledge(test_prompt_unknown)
-    print("\n--- TEST RESULT ---")
-    print(json.dumps(response, indent=2))
-    if response["synthesized_answer"] is None:
-        print("\nSUCCESS: AI correctly indicated no knowledge, allowing learning flow.")
-    else:
-        print("\nFAILURE: AI provided an answer instead of indicating no knowledge.")
-    print("--- END TEST ---\n")
-
-    # Test Case 2: Knowledge exists (should trigger teacher mode)
-    # To properly test this, we would need to mock the firestore call.
-    # For now, we assume the teacher mode works as verified previously.
+    logger.info("Running brain.py directly requires secrets to be set in your environment.")
+    # You would need to mock st.secrets for local CLI testing, for example:
+    # class MockStreamlit:
+    #     secrets = {
+    #         "FIREBASE_CREDENTIALS": os.environ.get("FIREBASE_CREDENTIALS"),
+    #         "GEMINI_API_KEY": os.environ.get("GEMINI_API_KEY")
+    #     }
+    # st = MockStreamlit()
+    # print(generate_response_from_knowledge("What is a neural network?"))
