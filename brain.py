@@ -89,6 +89,28 @@ def initialize_firebase():
 
 db = initialize_firebase()
 
+# Bootstrap foundational knowledge on first load
+@st.cache_resource
+def bootstrap_knowledge():
+    """Load foundational knowledge into the database on startup."""
+    if db:
+        try:
+            from knowledge_bootstrap import load_foundational_knowledge, load_sentence_patterns, get_bootstrap_stats
+            
+            # Load if not already loaded
+            stats = get_bootstrap_stats(db)
+            if stats.get('bootstrapped_concepts', 0) == 0:
+                logger.info("Bootstrapping foundational knowledge...")
+                concepts_loaded = load_foundational_knowledge(db)
+                patterns_loaded = load_sentence_patterns(db)
+                logger.info(f"Bootstrap complete: {concepts_loaded} concepts, {patterns_loaded} patterns")
+        except Exception as e:
+            logger.warning(f"Could not bootstrap knowledge: {e}")
+    return db
+
+# Trigger bootstrap on app load
+db = bootstrap_knowledge()
+
 # --- Configure Gemini API ---
 try:
     # Prefer environment variables for local/test runs, then Streamlit secrets

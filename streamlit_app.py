@@ -41,6 +41,7 @@ with st.sidebar:
     st.header("AI Teacher Preview")
     try:
         from brain import db, nlp, get_health_status
+        from knowledge_bootstrap import get_bootstrap_stats
         
         # Get health status
         health = get_health_status()
@@ -51,6 +52,24 @@ with st.sidebar:
             st.write(f"- Firebase: {'✅ Online' if health['firebase']['online'] else '❌ Offline'}")
             st.write(f"- spaCy NLP: {'✅ Online' if health['spacy']['online'] else '❌ Offline'}")
             st.write(f"- Gemini API: {'✅ Ready' if health['gemini']['configured'] else '⚠️ Not configured'}")
+        
+        # Show knowledge base statistics
+        if health["all_services"]:
+            try:
+                stats = get_bootstrap_stats(db)
+                if stats:
+                    st.markdown("---")
+                    st.subheader("📚 Knowledge Base")
+                    st.metric("Learned Concepts", stats.get('bootstrapped_concepts', 0))
+                    st.metric("Sentence Patterns", stats.get('sentence_patterns', 0))
+                    st.metric("Common Words", stats.get('common_words', 0))
+                    
+                    total_vocab = stats.get('total_vocabulary', 0)
+                    if total_vocab > 0:
+                        st.success(f"✓ {total_vocab}+ concepts loaded")
+            
+            except Exception as e:
+                logger.debug(f"Could not load knowledge stats: {e}")
         
         if health["all_services"]:
             try:
@@ -192,6 +211,7 @@ if prompt := st.chat_input("Ask a question..."):
                 # Immediately learn from this response (background, non-blocking)
                 try:
                     from brain import learn_unknowns_from_response, learn_related_topics_parallel
+                    from sentence_synthesis import extract_key_concepts, synthesize_response
                     import threading
                     
                     # Extract main topic from prompt (first word as proxy)
@@ -214,6 +234,19 @@ if prompt := st.chat_input("Ask a question..."):
                         daemon=True
                     )
                     related_thread.start()
+                    
+                    # Enhance response with synthesis (relating learned concepts)
+                    try:
+                        from brain import db
+                        key_concepts = extract_key_concepts(answer, db)
+                        if key_concepts and len(key_concepts) > 1:
+                            # Add synthesized context about how concepts relate
+                            enhanced_answer = synthesize_response(
+                                prompt, answer, key_concepts, db
+                            )
+                            answer = enhanced_answer
+                    except Exception as e:
+                        logger.debug(f"Response synthesis enhancement error: {e}")
                     
                 except Exception as e:
                     logger.debug(f"Background learning error: {e}")
