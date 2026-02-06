@@ -76,31 +76,53 @@ for idx, message in enumerate(st.session_state.messages):
                     st.session_state.messages[idx]["feedback"] = "correct"
             with cols[2]:
                 if st.button("✗", key=f"{feedback_key}_wrong", help="Response was wrong"):
-                    st.toast("Thanks for the feedback! We'll learn from this.", icon="❌")
+                    st.toast("Learning from incorrect response...", icon="🧠")
                     st.session_state.messages[idx]["feedback"] = "wrong"
                     
-                    # Store wrong answer feedback to Firestore for learning
-                    try:
-                        from brain import db
-                        if db:
-                            # Find the corresponding user prompt
-                            prev_user_msg = None
-                            for i in range(idx - 1, -1, -1):
-                                if st.session_state.messages[i]["role"] == "user":
-                                    prev_user_msg = st.session_state.messages[i]["content"]
-                                    break
+                    # Find the corresponding user prompt
+                    prev_user_msg = None
+                    for i in range(idx - 1, -1, -1):
+                        if st.session_state.messages[i]["role"] == "user":
+                            prev_user_msg = st.session_state.messages[i]["content"]
+                            break
+                    
+                    if prev_user_msg:
+                        # Intelligent learning: extract unknowns and learn
+                        try:
+                            from brain import learn_unknowns_from_response, regenerate_response_with_learning, db
                             
-                            if prev_user_msg:
+                            if db:
+                                # Step 1: Learn unknown words
+                                logger.info(f"Starting intelligent learning for: {prev_user_msg[:50]}...")
+                                learned = learn_unknowns_from_response(message["content"], query_context=prev_user_msg)
+                                
+                                if learned:
+                                    st.toast("✅ Learned new concepts!", icon="📚")
+                                    
+                                    # Step 2: Regenerate response
+                                    improved_answer = regenerate_response_with_learning(
+                                        prev_user_msg, 
+                                        message["content"]
+                                    )
+                                    
+                                    if improved_answer != message["content"]:
+                                        st.toast("✨ Regenerated improved response!", icon="✨")
+                                        st.session_state.messages[idx]["content"] = improved_answer
+                                        st.rerun()
+                                
+                                # Step 3: Store feedback
                                 feedback_ref = db.collection('feedback').document(f"wrong_{idx}_{int(time.time())}")
                                 feedback_ref.set({
                                     "type": "incorrect_response",
                                     "user_query": prev_user_msg,
                                     "ai_response": message["content"],
+                                    "learned_unknowns": learned,
                                     "timestamp": time.time()
                                 })
-                                logger.info(f"Stored incorrect response feedback for: {prev_user_msg[:50]}")
-                    except Exception as e:
-                        logger.debug(f"Could not store feedback: {e}")
+                                logger.info(f"Stored incorrect response feedback with learning data")
+                        except Exception as e:
+                            logger.error(f"Error during intelligent learning: {e}", exc_info=True)
+                            st.toast("⚠️ Learning encountered an issue", icon="⚠️")
 
 # 3. Handle new input
 if prompt := st.chat_input("Ask a question..."):
@@ -147,23 +169,47 @@ if prompt := st.chat_input("Ask a question..."):
                     st.session_state.messages[-1]["feedback"] = "correct"
             with cols[2]:
                 if st.button("✗", key=f"feedback_wrong_{len(st.session_state.messages)-1}", help="Response was wrong"):
-                    st.toast("Thanks for the feedback! We'll learn from this.", icon="❌")
+                    st.toast("Learning from incorrect response...", icon="🧠")
                     st.session_state.messages[-1]["feedback"] = "wrong"
                     
-                    # Store wrong answer feedback to Firestore for learning
+                    # Intelligent learning: extract unknowns and learn with Groq
                     try:
-                        from brain import db
+                        from brain import learn_unknowns_from_response, regenerate_response_with_learning, db
+                        
                         if db:
+                            # Step 1: Learn unknown words from the response
+                            logger.info(f"Starting intelligent learning for: {prompt[:50]}...")
+                            learned = learn_unknowns_from_response(answer, query_context=prompt)
+                            
+                            if learned:
+                                st.toast("✅ Learned new concepts!", icon="📚")
+                                
+                                # Step 2: Regenerate response with new knowledge
+                                improved_answer = regenerate_response_with_learning(
+                                    prompt, 
+                                    answer,
+                                    conversation_context=conversation_context
+                                )
+                                
+                                if improved_answer != answer:
+                                    st.toast("✨ Regenerated improved response!", icon="✨")
+                                    st.session_state.messages[-1]["content"] = improved_answer
+                                    st.session_state.messages[-1]["improved"] = True
+                                    st.rerun()
+                            
+                            # Step 3: Store feedback for future reference
                             feedback_ref = db.collection('feedback').document(f"wrong_{len(st.session_state.messages)-1}_{int(time.time())}")
                             feedback_ref.set({
                                 "type": "incorrect_response",
                                 "user_query": prompt,
                                 "ai_response": answer,
+                                "learned_unknowns": learned,
                                 "timestamp": time.time()
                             })
-                            logger.info(f"Stored incorrect response feedback for: {prompt[:50]}")
+                            logger.info(f"Stored incorrect response feedback with learning data")
                     except Exception as e:
-                        logger.debug(f"Could not store feedback: {e}")
+                        logger.error(f"Error during intelligent learning: {e}", exc_info=True)
+                        st.toast("⚠️ Learning encountered an issue", icon="⚠️")
         else:
             msg = "I don't have a response. Please try again."
             st.markdown(msg)

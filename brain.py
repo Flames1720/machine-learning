@@ -7,7 +7,7 @@ from ai_providers import generate_text
 import streamlit as st
 from firebase_admin import credentials, firestore
 import json
-from typing import Set
+from typing import Set, List
 from difflib import SequenceMatcher
 
 # Get a logger
@@ -152,6 +152,142 @@ def get_health_status():
         },
         "all_services": db is not None and nlp is not None
     }
+
+
+def extract_unknown_words(response_text: str) -> List[str]:
+    """Extract words from response that the AI doesn't have knowledge about.
+    
+    Args:
+        response_text: The AI's response text
+    
+    Returns:
+        List of unknown words/terms
+    """
+    if not nlp or not db:
+        return []
+    
+    try:
+        doc = nlp(response_text)
+        unknown_words = []
+        
+        for token in doc:
+            # Only check nouns and adjectives
+            if token.pos_ not in ["NOUN", "PROPN", "ADJ"]:
+                continue
+            if token.is_stop or len(token.text) < 3:
+                continue
+            
+            lemma = token.lemma_.lower()
+            
+            # Check if we have knowledge about this word
+            try:
+                doc_ref = db.collection('solidified_knowledge').document(lemma)
+                if not doc_ref.get().exists:
+                    unknown_words.append(token.text.lower())
+            except Exception:
+                pass
+        
+        # Remove duplicates and return
+        return list(set(unknown_words))[:10]  # Limit to top 10 unknown words
+    
+    except Exception as e:
+        logger.debug(f"Error extracting unknown words: {e}")
+        return []
+
+
+def learn_unknowns_from_response(response_text: str, query_context: str = "") -> bool:
+    """Use Groq to learn about unknown words found in the response.
+    
+    Args:
+        response_text: The AI's response containing unknown terms
+        query_context: Original user query for context
+    
+    Returns:
+        True if learning succeeded, False otherwise
+    """
+    if not db:
+        return False
+    
+    unknown_words = extract_unknown_words(response_text)
+    if not unknown_words:
+        logger.info("No unknown words to learn")
+        return True
+    
+    logger.info(f"Found {len(unknown_words)} unknown words to learn: {unknown_words}")
+    
+    # Ask Groq about all unknown words in one query
+    learning_prompt = (
+        f"Given this context: {query_context}\n\n"
+        f"In the response: {response_text[:500]}\n\n"
+        f"What are the definitions of these terms? Provide brief, clear definitions in JSON format:\n"
+        f"{{\"terms\": {{\"term1\": \"definition1\", \"term2\": \"definition2\", ...}}}}\n\n"
+        f"Terms to define: {', '.join(unknown_words[:10])}"
+    )
+    
+    try:
+        from ai_providers import generate_text
+        definitions_json = generate_text(learning_prompt, prefer=('groq', 'gemini'))
+        
+        # Parse the JSON response
+        try:
+            import json
+            defs = json.loads(definitions_json)
+            terms_dict = defs.get('terms', {})
+            
+            # Store each learned term
+            if terms_dict:
+                for term, definition in terms_dict.items():
+                    try:
+                        teach_topic(term.lower(), definition, force=True)
+                        logger.info(f"Learned new term: {term} = {definition[:50]}...")
+                    except Exception as e:
+                        logger.debug(f"Could not teach term {term}: {e}")
+                
+                return True
+        except json.JSONDecodeError:
+            logger.debug("Could not parse Groq response as JSON, attempting text extraction")
+            # Fallback: store the entire response as learning
+            try:
+                teach_topic(f"context_{hash(response_text) % 10000}", definitions_json)
+                return True
+            except Exception as e:
+                logger.debug(f"Fallback learning failed: {e}")
+                return False
+    
+    except Exception as e:
+        logger.error(f"Error learning unknowns: {e}")
+        return False
+
+
+def regenerate_response_with_learning(user_query: str, original_response: str, conversation_context=None) -> str:
+    """Regenerate a response after learning unknown terms.
+    
+    Args:
+        user_query: Original user question
+        original_response: The incorrect/incomplete response
+        conversation_context: Previous messages for context
+    
+    Returns:
+        Improved response or original if regeneration fails
+    """
+    try:
+        from ai_providers import generate_text
+        
+        regeneration_prompt = (
+            f"The user asked: {user_query}\n\n"
+            f"I previously responded: {original_response[:300]}\n\n"
+            f"But I realize I may have missed some important context. "
+            f"Rethink and provide a more complete, accurate answer based on everything I know."
+        )
+        
+        improved = generate_text(regeneration_prompt, prefer=('groq', 'gemini'))
+        if improved and len(improved) > 20:
+            logger.info(f"Regenerated response after learning")
+            return improved
+    except Exception as e:
+        logger.debug(f"Could not regenerate response: {e}")
+    
+    return original_response
 
 
 def detect_and_log_unknown_words(text):
