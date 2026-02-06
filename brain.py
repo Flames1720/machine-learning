@@ -263,6 +263,8 @@ def learn_unknowns_from_response(response_text: str, query_context: str = "") ->
 def search_web_and_learn(query: str) -> Dict:
     """Search web for information about a query using Groq.
     
+    Also triggers learning of related topics found in the response.
+    
     Args:
         query: User's question or topic
     
@@ -271,6 +273,7 @@ def search_web_and_learn(query: str) -> Dict:
     """
     try:
         from ai_providers import generate_text
+        import threading
         
         search_prompt = (
             f"Based on your knowledge, provide 3-5 key facts about: {query}\n"
@@ -281,11 +284,23 @@ def search_web_and_learn(query: str) -> Dict:
         
         try:
             web_data = json.loads(result)
-            logger.info(f"Learned {len(web_data.get('facts', []))} facts from web search")
-            return web_data
+            facts_text = " ".join(web_data.get('facts', []))
         except json.JSONDecodeError:
             logger.debug("Could not parse web search result as JSON")
-            return {"facts": [result], "sources": ["groq"]}
+            web_data = {"facts": [result], "sources": ["groq"]}
+            facts_text = result
+        
+        logger.info(f"Learned {len(web_data.get('facts', []))} facts from web search")
+        
+        # Learn related topics in background (non-blocking)
+        thread = threading.Thread(
+            target=learn_related_topics_parallel,
+            args=(query, facts_text),
+            daemon=True
+        )
+        thread.start()
+        
+        return web_data
     
     except Exception as e:
         logger.error(f"Error searching web: {e}")
@@ -370,6 +385,112 @@ def regenerate_response_with_learning(user_query: str, original_response: str, c
         logger.debug(f"Could not regenerate response: {e}")
     
     return original_response
+
+
+def extract_related_topics(text: str) -> List[str]:
+    """Extract related topics and keywords from text using spaCy NER.
+    
+    Args:
+        text: The text to extract topics from
+    
+    Returns:
+        List of related topic keywords
+    """
+    related_topics = []
+    try:
+        if not nlp:
+            return []
+        
+        doc = nlp(text)
+        
+        # Extract named entities (PERSON, ORG, GPE, PRODUCT, etc.)
+        for ent in doc.ents:
+            if ent.label_ in ["PRODUCT", "ORG", "GPE", "EVENT", "WORK_OF_ART"]:
+                related_topics.append(ent.text.strip())
+        
+        # Extract noun phrases (noun + adjectives)
+        for chunk in doc.noun_chunks:
+            if len(chunk.text.split()) <= 3 and len(chunk.text) < 50:
+                related_topics.append(chunk.text.strip())
+        
+        # Remove duplicates and short terms
+        related_topics = list(set([t for t in related_topics if len(t) > 2]))
+        
+        logger.info(f"Extracted {len(related_topics)} related topics")
+        return related_topics[:5]  # Return top 5
+    
+    except Exception as e:
+        logger.error(f"Error extracting related topics: {e}")
+        return []
+
+
+def learn_related_topics_parallel(main_topic: str, response_text: str) -> List[str]:
+    """Learn definitions for related topics found in response text.
+    
+    Args:
+        main_topic: The main topic being discussed
+        response_text: The response containing related terms
+    
+    Returns:
+        List of related topics that were learned
+    """
+    if not db:
+        return []
+    
+    try:
+        from ai_providers import generate_text
+        import threading
+        
+        # Extract related topics from the response
+        related_topics = extract_related_topics(response_text)
+        learned = []
+        
+        def learn_topic(topic):
+            """Learn definition for a single related topic."""
+            try:
+                # Check if already learned
+                doc = db.collection('solidified_knowledge').document(topic).get()
+                if doc.exists:
+                    return
+                
+                # Ask Groq for definition
+                definition_prompt = (
+                    f"Define '{topic}' in 1-2 sentences. "
+                    f"Be specific and relevant to the context of '{main_topic}'."
+                )
+                
+                definition = generate_text(definition_prompt, prefer=('groq', 'gemini'))
+                
+                # Store the learned definition
+                db.collection('solidified_knowledge').document(topic).set({
+                    'definition': definition,
+                    'related_to': [main_topic],
+                    'facts': [definition],
+                    'learned_at': datetime.now().isoformat(),
+                    'is_related_term': True
+                }, merge=True)
+                
+                learned.append(topic)
+                logger.info(f"Learned related topic: {topic}")
+            
+            except Exception as e:
+                logger.error(f"Error learning topic '{topic}': {e}")
+        
+        # Learn topics in parallel (non-blocking threads)
+        threads = []
+        for topic in related_topics:
+            thread = threading.Thread(target=learn_topic, args=(topic,), daemon=True)
+            thread.start()
+            threads.append(thread)
+        
+        # Don't wait for threads (non-blocking)
+        logger.info(f"Started learning {len(threads)} related topics in background")
+        
+        return related_topics
+    
+    except Exception as e:
+        logger.error(f"Error in learn_related_topics_parallel: {e}")
+        return []
 
 
 def detect_and_log_unknown_words(text):

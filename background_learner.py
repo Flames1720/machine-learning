@@ -18,6 +18,8 @@ REFINEMENT_INTERVAL = 300  # 5 minutes
 def schedule_refinement_task(topic: str, response_text: str, knowledge_data: Dict):
     """Schedule a background refinement task for a topic.
     
+    Also schedules learning for related topics found in the response.
+    
     Args:
         topic: The topic being refined
         response_text: The current response
@@ -25,12 +27,13 @@ def schedule_refinement_task(topic: str, response_text: str, knowledge_data: Dic
     """
     global _learning_tasks, _refinement_timers
     
-    # Store the task
+    # Store the main task
     _learning_tasks[topic] = {
         "response": response_text,
         "knowledge": knowledge_data,
         "created_at": time.time(),
-        "status": "pending"
+        "status": "pending",
+        "related_topics": []
     }
     
     # Set timer for next refinement
@@ -45,6 +48,37 @@ def schedule_refinement_task(topic: str, response_text: str, knowledge_data: Dic
         daemon=True
     )
     thread.start()
+    
+    # Also schedule learning for related topics (in separate thread)
+    thread = threading.Thread(
+        target=_schedule_related_topics_learning,
+        args=(topic, response_text),
+        daemon=True
+    )
+    thread.start()
+
+
+def _schedule_related_topics_learning(topic: str, response_text: str):
+    """Extract and schedule learning for related topics.
+    
+    Args:
+        topic: The main topic
+        response_text: Response text containing related topics
+    """
+    try:
+        from brain import extract_related_topics, learn_related_topics_parallel
+        
+        related = extract_related_topics(response_text)
+        if related:
+            _learning_tasks[topic]["related_topics"] = related
+            logger.info(f"Found {len(related)} related topics for '{topic}': {related}")
+        
+        # Trigger parallel learning of related topics
+        learn_related_topics_parallel(topic, response_text)
+    
+    except Exception as e:
+        logger.error(f"Error scheduling related topics learning: {e}")
+
 
 
 def _run_refinement_task(topic: str):

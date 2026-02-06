@@ -20,6 +20,14 @@ try:
         for topic, task in list(_learning_tasks.items())[:3]:
             status_icon = "⚙️" if task["status"] == "pending" else "✅" if task["status"] == "refined" else "❌"
             st.sidebar.caption(f"{status_icon} {topic[:30]}")
+            
+            # Show related topics if any
+            related = task.get("related_topics", [])
+            if related:
+                rel_text = ", ".join(related[:2])
+                if len(related) > 2:
+                    rel_text += f", +{len(related)-2} more"
+                st.sidebar.caption(f"  └─ 📚 {rel_text}")
     else:
         st.sidebar.caption("✅ All caught up!")
 except Exception as e:
@@ -183,17 +191,30 @@ if prompt := st.chat_input("Ask a question..."):
                 
                 # Immediately learn from this response (background, non-blocking)
                 try:
-                    from brain import learn_unknowns_from_response
-                    # Fire and forget - learn asynchronously
+                    from brain import learn_unknowns_from_response, learn_related_topics_parallel
+                    import threading
+                    
+                    # Extract main topic from prompt (first word as proxy)
+                    main_topic = prompt.split()[0] if prompt.split() else "topic"
+                    
+                    # Fire and forget - learn unknowns asynchronously
                     unknowns = extract_unknown_words(answer)
                     if unknowns:
-                        import threading
                         learn_thread = threading.Thread(
                             target=learn_unknowns_from_response,
                             args=(answer, prompt),
                             daemon=True
                         )
                         learn_thread.start()
+                    
+                    # Also learn related topics/keywords in background
+                    related_thread = threading.Thread(
+                        target=learn_related_topics_parallel,
+                        args=(main_topic, answer),
+                        daemon=True
+                    )
+                    related_thread.start()
+                    
                 except Exception as e:
                     logger.debug(f"Background learning error: {e}")
                 
