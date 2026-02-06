@@ -10,4 +10,4 @@ __pycache__/
 service-account.json
 firebase-debug.log
 # Documentation
-*.md
+*.md.streamlit/secrets.toml
