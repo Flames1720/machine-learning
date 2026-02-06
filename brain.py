@@ -11,6 +11,14 @@ from typing import Set, List, Dict
 from difflib import SequenceMatcher
 from datetime import datetime
 
+# Optional chroma integration
+try:
+    from chroma_helper import upsert_knowledge, query_similar, init_chroma
+    CHROMA_ENABLED = True
+    init_chroma()
+except Exception:
+    CHROMA_ENABLED = False
+
 # Get a logger
 logger = logging.getLogger(__name__)
 
@@ -367,6 +375,13 @@ def refine_knowledge_entry(topic: str, knowledge_data: Dict) -> bool:
             # Store refined knowledge
             doc_ref = db.collection('solidified_knowledge').document(topic)
             doc_ref.set(updated_knowledge, merge=True)
+            # Update chroma embeddings for semantic search
+            try:
+                if CHROMA_ENABLED:
+                    combined_text = updated_knowledge.get('definition', '') + ' ' + ' '.join(updated_knowledge.get('facts', []))
+                    upsert_knowledge(topic, combined_text, metadata={'refined_at': updated_knowledge['refined_at']})
+            except Exception as e:
+                logger.debug(f"Chroma upsert failed during refinement: {e}")
             
             logger.info(f"Refined knowledge for: {topic}")
             return True
@@ -392,13 +407,27 @@ def regenerate_response_with_learning(user_query: str, original_response: str, c
     """
     try:
         from ai_providers import generate_text
-        
+        # Use chroma to gather related learned context (if available)
+        context_pieces = []
+        try:
+            if CHROMA_ENABLED:
+                sims = query_similar(user_query, n_results=4)
+                for s in sims:
+                    doc = s.get('document') or ''
+                    if doc:
+                        context_pieces.append(doc)
+        except Exception:
+            pass
+
+        extra_context = "\n\nRelated learned snippets:\n" + "\n".join(context_pieces) if context_pieces else ""
+
         regeneration_prompt = (
             f"The user asked: {user_query}\n\n"
             f"I previously responded: {original_response[:300]}\n\n"
             f"Rethink this question completely and provide a more accurate, complete, and well-researched answer."
+            f"\n\n{extra_context}"
         )
-        
+
         improved = generate_text(regeneration_prompt, prefer=('groq', 'gemini'))
         if improved and len(improved) > 20:
             logger.info(f"Regenerated response after learning")
@@ -491,6 +520,13 @@ def learn_related_topics_parallel(main_topic: str, response_text: str) -> List[s
                     'learned_at': datetime.now().isoformat(),
                     'is_related_term': True
                 }, merge=True)
+                # Also upsert into chroma for semantic similarity
+                try:
+                    if CHROMA_ENABLED:
+                        combined = definition
+                        upsert_knowledge(topic, combined, metadata={'related_to': [main_topic], 'learned_at': datetime.now().isoformat()})
+                except Exception as e:
+                    logger.debug(f"Chroma upsert failed for learned topic {topic}: {e}")
                 
                 learned.append(topic)
                 logger.info(f"Learned related topic: {topic}")
@@ -637,6 +673,9 @@ def generate_response_from_knowledge(prompt_text, conversation_context=None):
     expanded_prompt = _expand_aliases(prompt_text)
     doc = nlp(expanded_prompt)
     key_concepts = {token.lemma_.lower() for token in doc if token.pos_ in ["NOUN", "PROPN"]}
+    # Heuristic: short/generic prompts (e.g., "how are you?") should not pull unrelated domain facts.
+    tokens = [t.text.lower() for t in doc if not t.is_punct]
+    is_generic_short = len(tokens) <= 6 and any(w in tokens for w in ("how","what","why","who","when","are","is")) and not key_concepts
     
     # If conversation context exists, also extract concepts from recent history
     if conversation_context:
@@ -649,7 +688,7 @@ def generate_response_from_knowledge(prompt_text, conversation_context=None):
                 pass
     
     retrieved_knowledge = ""
-    if key_concepts:
+    if key_concepts and not is_generic_short:
         for concept in key_concepts:
             doc_ref = db.collection('solidified_knowledge').document(concept)
             doc_snapshot = doc_ref.get()
@@ -657,6 +696,16 @@ def generate_response_from_knowledge(prompt_text, conversation_context=None):
                 knowledge = doc_snapshot.to_dict()
                 definition = knowledge.get('definition', '')
                 retrieved_knowledge += f"- Fact about {concept}: {definition}\n"
+    else:
+        # If generic short prompt, prefer conversational basics to avoid unrelated domain jumps
+        if is_generic_short:
+            try:
+                doc_ref = db.collection('solidified_knowledge').document('conversational_response_basics')
+                if doc_ref.get().exists:
+                    kb = doc_ref.get().to_dict()
+                    retrieved_knowledge = '\n'.join(kb.get('examples', [])[:3]) if kb.get('examples') else kb.get('definition','')
+            except Exception:
+                pass
     
     # If no exact matches found, try fuzzy matching
     if not retrieved_knowledge and key_concepts:
@@ -845,6 +894,13 @@ def teach_topic(topic, context_text=None, force=False):
         else:
             ref.set(doc_data, merge=True)
         logger.info(f"Stored knowledge for term '{term}' in Firestore.")
+        # Also upsert into chroma for semantic retrieval
+        try:
+            if CHROMA_ENABLED:
+                combined = doc_data.get('definition', '') + ' ' + ' '.join(doc_data.get('facts', []))
+                upsert_knowledge(term, combined, metadata={'source': doc_data.get('source'), 'stored_at': datetime.now().isoformat()})
+        except Exception as e:
+            logger.debug(f"Chroma upsert failed for term {term}: {e}")
         return term, doc_data
     except Exception as e:
         logger.error(f"Failed to write knowledge to Firestore: {e}", exc_info=True)
