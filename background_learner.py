@@ -7,6 +7,16 @@ import threading
 from typing import Optional, Dict
 from datetime import datetime, timedelta
 
+# Import the new knowledge base module
+from brain.knowledge_base import refine_knowledge_entry, extract_related_topics
+
+# Import placeholder functions from brain_legacy
+from brain_legacy import (
+    learn_related_topics_parallel,
+    search_web_and_learn,
+    regenerate_response_with_learning,
+)
+
 logger = logging.getLogger(__name__)
 
 # Global state for background tasks
@@ -66,8 +76,6 @@ def _schedule_related_topics_learning(topic: str, response_text: str):
         response_text: Response text containing related topics
     """
     try:
-        from brain import extract_related_topics, learn_related_topics_parallel
-        
         related = extract_related_topics(response_text)
         if related:
             _learning_tasks[topic]["related_topics"] = related
@@ -77,8 +85,7 @@ def _schedule_related_topics_learning(topic: str, response_text: str):
         learn_related_topics_parallel(topic, response_text)
     
     except Exception as e:
-        logger.error(f"Error scheduling related topics learning: {e}")
-
+        logger.error(f"Error scheduling related topics learning: {e}", exc_info=True)
 
 
 def _run_refinement_task(topic: str):
@@ -94,7 +101,6 @@ def _run_refinement_task(topic: str):
                 logger.info(f"Running refinement task for: {topic}")
                 
                 try:
-                    from brain import refine_knowledge_entry
                     improved = refine_knowledge_entry(topic, task["knowledge"])
                     
                     if improved:
@@ -106,15 +112,16 @@ def _run_refinement_task(topic: str):
                     _refinement_timers[topic] = datetime.now() + timedelta(seconds=REFINEMENT_INTERVAL)
                 
                 except Exception as e:
-                    logger.error(f"Error refining knowledge for {topic}: {e}")
+                    logger.error(f"An error occurred during knowledge refinement for topic '{topic}'.", exc_info=True)
                     task["status"] = "error"
+                    # Stop retrying this task to prevent a loop of failures
                     break
             
             # Sleep before checking again
             time.sleep(10)
     
     except Exception as e:
-        logger.error(f"Background refinement task failed for {topic}: {e}")
+        logger.error(f"The background refinement task for topic '{topic}' encountered a critical failure and has stopped.", exc_info=True)
 
 
 def schedule_recovery_task(user_query: str, failed_response: str, max_attempts: int = 3):
@@ -150,8 +157,6 @@ def schedule_recovery_task(user_query: str, failed_response: str, max_attempts: 
 def _run_recovery_task(task: Dict):
     """Run recovery task: search web + Groq rethink until better."""
     try:
-        from brain import search_web_and_learn, regenerate_response_with_learning
-        
         for attempt in range(task["max_attempts"]):
             task["attempts"] = attempt + 1
             logger.info(f"Recovery attempt {task['attempts']}/{task['max_attempts']} for: {task['query'][:50]}")
@@ -183,7 +188,7 @@ def _run_recovery_task(task: Dict):
         logger.warning(f"Recovery failed after {task['attempts']} attempts")
     
     except Exception as e:
-        logger.error(f"Recovery task error: {e}")
+        logger.error(f"Recovery task error: {e}", exc_info=True)
         task["status"] = "error"
 
 

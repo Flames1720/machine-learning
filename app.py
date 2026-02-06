@@ -1,10 +1,15 @@
 from flask import Flask, request, jsonify, send_from_directory
-from brain import generate_response_from_knowledge, detect_and_log_unknown_words
 import logging
+
+# Import the new config and services
+from config import APP_CONFIG
+from services import db, nlp, get_health_status
+
+from brain.knowledge_base import generate_response_from_knowledge
 
 # --- App Initialization and Logging ---
 app = Flask(__name__, static_folder='static')
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=APP_CONFIG.LOG_LEVEL, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # --- Serve the HTML Frontend ---
@@ -28,24 +33,20 @@ def ask():
 
     logger.info(f"Received prompt: {prompt}")
     
-    # Get the AI's response
     response_data = generate_response_from_knowledge(prompt)
     assistant_response = response_data.get("synthesized_answer")
-
-    # If the AI doesn't know, trigger the learning flow
-    if not assistant_response:
-        logger.info("AI has no knowledge, logging words for learning.")
-        detect_and_log_unknown_words(prompt)
-        # You can customize this message if you want
-        assistant_response = "Thank you. I have no prior knowledge of that. I will learn from your words."
 
     return jsonify({
         'synthesized_answer': assistant_response,
         'raw_knowledge': response_data.get('raw_knowledge')
     })
 
-# --- Main entry point for running the server ---
+# --- Health Check Endpoint ---
+@app.route('/health')
+def health_check():
+    """Returns the health status of the application and its services."""
+    return jsonify(get_health_status())
+
+# --- Main entry point for running the server (for local development) ---
 if __name__ == '__main__':
-    # Note: For development, this is fine. 
-    # For production, a proper WSGI server like Gunicorn would be used.
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=8080)

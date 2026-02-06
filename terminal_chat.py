@@ -1,5 +1,6 @@
 
-from brain import generate_response_from_knowledge, detect_and_log_unknown_words
+from brain.knowledge_base import generate_response_from_knowledge
+from brain_legacy import detect_and_log_unknown_words
 import logging
 import json
 
@@ -16,13 +17,18 @@ if __name__ == "__main__":
         if prompt.lower() == 'exit':
             break
         
-        response_data = generate_response_from_knowledge(prompt)
-        assistant_response = response_data.get("synthesized_answer")
-        
-        # If the AI can't provide a direct answer from its knowledge, log words for learning
-        if not assistant_response:
-            print("AI: Thank you. I have no prior knowledge of that. I will learn from your words.")
-            detect_and_log_unknown_words(prompt)
-            print("AI: (Your words have been added to my learning queue.)")
-        else:
-            print(f"AI: {assistant_response}")
+        try:
+            response_data = generate_response_from_knowledge(prompt)
+            assistant_response = response_data.get("synthesized_answer")
+            
+            # If the AI can't provide a direct answer from its knowledge, log words for learning
+            if not assistant_response:
+                print("AI: Thank you. I have no prior knowledge of that. I will learn from your words.")
+                detect_and_log_unknown_words(prompt)
+                print("AI: (Your words have been added to my learning queue.)")
+            else:
+                print(f"AI: {assistant_response}")
+
+        except Exception as e:
+            logging.error(f"An unexpected error occurred in the chat loop: {e}", exc_info=True)
+            print("AI: I'm sorry, I encountered a problem while trying to respond. Please try again.")

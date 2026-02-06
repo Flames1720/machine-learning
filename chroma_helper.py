@@ -5,6 +5,8 @@ Provides init, upsert, and similarity query helpers used by the learning flows.
 import logging
 from typing import Optional, List, Dict
 
+from config import APP_CONFIG
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -12,19 +14,19 @@ try:
     from chromadb.config import Settings
     from chromadb.utils import embedding_functions
     CHROMADB_AVAILABLE = True
-except Exception as e:
+except ImportError:
     chromadb = None
     embedding_functions = None
     CHROMADB_AVAILABLE = False
-    logger.debug(f"ChromaDB not available: {e}")
+    logger.debug("ChromaDB not available.")
 
 
 _client = None
 _collection = None
 
 
-def init_chroma(persist_directory: str = "./chroma_db", collection_name: str = "knowledge"):
-    """Initialize Chroma client and collection. Safe to call multiple times."""
+def init_chroma():
+    """Initialize Chroma client and collection using settings from config. Safe to call multiple times."""
     global _client, _collection
     if not CHROMADB_AVAILABLE:
         logger.warning("ChromaDB not installed; semantic search disabled.")
@@ -32,7 +34,7 @@ def init_chroma(persist_directory: str = "./chroma_db", collection_name: str = "
 
     if _client is None:
         try:
-            settings = Settings(chroma_db_impl="duckdb+parquet", persist_directory=persist_directory)
+            settings = Settings(chroma_db_impl="duckdb+parquet", persist_directory=APP_CONFIG.CHROMA_PERSIST_DIRECTORY)
             _client = chromadb.Client(settings)
             logger.info("ChromaDB client initialized.")
         except Exception as e:
@@ -41,20 +43,19 @@ def init_chroma(persist_directory: str = "./chroma_db", collection_name: str = "
 
     if _collection is None:
         try:
-            # Use a SentenceTransformer embedding helper if available
             if embedding_functions and hasattr(embedding_functions, "SentenceTransformerEmbeddingFunction"):
-                ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+                ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=APP_CONFIG.CHROMA_EMBEDDING_MODEL)
             else:
                 ef = None
-            _collection = _client.get_or_create_collection(name=collection_name, embedding_function=ef)
-            logger.info(f"Chroma collection '{collection_name}' ready.")
+            _collection = _client.get_or_create_collection(name=APP_CONFIG.CHROMA_COLLECTION_NAME, embedding_function=ef)
+            logger.info(f"Chroma collection '{APP_CONFIG.CHROMA_COLLECTION_NAME}' ready.")
         except Exception as e:
             logger.error(f"Failed to get/create Chroma collection: {e}")
             return None
 
     return _collection
 
-
+# ... (the rest of your chroma_helper.py functions remain the same)
 def upsert_knowledge(id: str, text: str, metadata: Optional[Dict] = None):
     """Upsert a single knowledge item into Chroma collection.
 

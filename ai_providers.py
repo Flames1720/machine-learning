@@ -1,107 +1,101 @@
-import os
 import logging
-import json
-import requests
+from services import gemini, groq_client, APP_CONFIG
 
 logger = logging.getLogger(__name__)
 
-
 def _try_gemini(prompt):
-    try:
-        import google.genai as genai
-    except Exception:
+    """Attempts to generate content using the Gemini API's chat functionality."""
+    if not gemini:
+        logger.warning("Gemini provider not configured. Skipping.")
         return None
-
     try:
-        # Prefer GenerativeModel if available
-        if hasattr(genai, 'GenerativeModel'):
-            model = genai.GenerativeModel('gemini-2.5-flash')
-            resp = model.generate_content(prompt)
-            return getattr(resp, 'text', None) or getattr(resp, 'response', None) or str(resp)
-
-        # Fallback to a Client API if present
-        if hasattr(genai, 'Client'):
-            try:
-                client = genai.Client()
-                if hasattr(client, 'generate'):
-                    resp = client.generate(prompt)
-                    return getattr(resp, 'text', None) or str(resp)
-                if hasattr(client, 'generate_text'):
-                    resp = client.generate_text(prompt)
-                    return getattr(resp, 'text', None) or str(resp)
-            except Exception:
-                pass
+        # The correct pattern is to create a Chat instance and send messages with it.
+        chat = gemini.start_chat()
+        resp = chat.send_message(prompt)
+        return resp.text
     except Exception as e:
-        logger.debug(f"Gemini provider failed: {e}")
-    return None
-
+        logger.error(f"Gemini provider failed: {e}", exc_info=True)
+        return None
 
 def _try_groq(prompt):
-    # Attempt to call Groq via SDK or HTTP. Requires GROQ_API_KEY and GROQ_MODEL
-    groq_key = os.environ.get('GROQ_API_KEY') or os.environ.get('GROQ_KEY')
-    groq_model = os.environ.get('GROQ_MODEL')
-    if not groq_key or not groq_model:
+    """DEPRECATED: Use groq_generate_text for more control."""
+    logger.warning("The _try_groq function is deprecated. Use groq_generate_text instead.")
+    if not groq_client:
+        logger.warning("Groq provider not configured. Skipping.")
         return None
-    # Try SDK if installed (preferred, using Chat Completions API)
     try:
-        from groq import Groq
-        try:
-            client = Groq(api_key=groq_key)
-            messages = [
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt}
-            ]
-            resp = client.chat.completions.create(messages=messages, model=groq_model)
-            # Response shape per docs: resp.choices[0].message.content
-            try:
-                return resp.choices[0].message.content
-            except Exception:
-                return str(resp)
-        except Exception as e:
-            logger.debug(f"Groq SDK chat call failed: {e}")
-    except Exception:
-        logger.debug("Groq SDK not installed")
-
-    # Fallback to HTTP request (best-effort). The exact Groq API path may differ.
-    try:
-        base = os.environ.get('GROQ_API_URL', 'https://api.groq.ai/v1')
-        url = f"{base}/chat/completions"
-        headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-        payload = {"model": groq_model, "messages": [{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":prompt}], "max_completion_tokens": 1024}
-        r = requests.post(url, headers=headers, json=payload, timeout=20)
-        if r.status_code == 200:
-            data = r.json()
-            # Try common fields
-            if isinstance(data, dict):
-                # docs show choices[0].message.content
-                try:
-                    return data['choices'][0]['message']['content']
-                except Exception:
-                    return json.dumps(data)
-            return str(data)
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": prompt}
+        ]
+        resp = groq_client.chat.completions.create(
+            messages=messages, 
+            model=APP_CONFIG.GROQ_MODEL
+        )
+        return resp.choices[0].message.content
     except Exception as e:
-        logger.debug(f"Groq provider HTTP call failed: {e}")
+        logger.error(f"Groq provider failed: {e}", exc_info=True)
+        return None
 
-    return None
+def groq_generate_text(system_prompt: str, user_prompt: str):
+    """Generates a response from Groq using a system and user prompt.
 
+    Args:
+        system_prompt: The system-level instruction for the model.
+        user_prompt: The user's query or prompt.
+
+    Returns:
+        The generated text as a string, or a default message if it fails.
+    """
+    if not groq_client:
+        logger.warning("Groq provider not configured. Cannot generate text.")
+        return "Groq provider is not available."
+    try:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        resp = groq_client.chat.completions.create(
+            messages=messages, 
+            model=APP_CONFIG.GROQ_MODEL
+        )
+        return resp.choices[0].message.content
+    except Exception as e:
+        logger.error(f"Groq provider failed: {e}", exc_info=True)
+        return "I am having trouble accessing my knowledge base at the moment."
 
 def generate_text(prompt, prefer=None):
-    """Generate text from available providers.
+    """Generate text from available providers, with fallback.
 
-    prefer: list or tuple ordering provider names e.g. ('gemini','groq')
-    Returns generated text or raises RuntimeError if none available.
+    Args:
+        prompt: The input prompt for the AI.
+        prefer: A tuple or list specifying the preferred order of providers (e.g., ('gemini', 'groq')).
+
+    Returns:
+        The generated text as a string, or raises a RuntimeError if all providers fail.
     """
     if prefer is None:
         prefer = ('gemini', 'groq')
 
-    for p in prefer:
-        if p == 'gemini':
-            out = _try_gemini(prompt)
-            if out:
-                return out
-        elif p == 'groq':
-            out = _try_groq(prompt)
-            if out:
-                return out
+    logger.info(f"Generating text with provider preference: {prefer}")
 
-    raise RuntimeError('No LLM providers available or all providers failed')
+    for provider in prefer:
+        if provider == 'gemini':
+            logger.info("Attempting to use Gemini...")
+            output = _try_gemini(prompt)
+            if output:
+                logger.info("Success with Gemini.")
+                return output
+            logger.warning("Gemini failed. Falling back to next provider.")
+
+        elif provider == 'groq':
+            logger.info("Attempting to use Groq...")
+            output = _try_groq(prompt) # Stays for compatibility, but new code should use groq_generate_text
+            if output:
+                logger.info("Success with Groq.")
+                return output
+            logger.warning("Groq failed. Falling back to next provider.")
+
+    # If the loop completes without returning, all providers have failed.
+    logger.critical("All LLM providers failed to generate a response.")
+    raise RuntimeError("All LLM providers are unavailable or failed.")
