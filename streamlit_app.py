@@ -60,10 +60,47 @@ with st.sidebar:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# 2. Display existing chat history IMMEDIATELY
-for message in st.session_state.messages:
+# 2. Display existing chat history with feedback buttons
+for idx, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+        cols = st.columns([1, 0.1, 0.1]) if message["role"] == "assistant" else [st.container()]
+        with cols[0]:
+            st.markdown(message["content"])
+        
+        # Add feedback buttons for assistant messages
+        if message["role"] == "assistant" and len(cols) > 1:
+            feedback_key = f"feedback_{idx}"
+            with cols[1]:
+                if st.button("✓", key=f"{feedback_key}_correct", help="Response was correct"):
+                    st.toast("Thanks for the feedback! ✓", icon="✅")
+                    st.session_state.messages[idx]["feedback"] = "correct"
+            with cols[2]:
+                if st.button("✗", key=f"{feedback_key}_wrong", help="Response was wrong"):
+                    st.toast("Thanks for the feedback! We'll learn from this.", icon="❌")
+                    st.session_state.messages[idx]["feedback"] = "wrong"
+                    
+                    # Store wrong answer feedback to Firestore for learning
+                    try:
+                        from brain import db
+                        if db:
+                            # Find the corresponding user prompt
+                            prev_user_msg = None
+                            for i in range(idx - 1, -1, -1):
+                                if st.session_state.messages[i]["role"] == "user":
+                                    prev_user_msg = st.session_state.messages[i]["content"]
+                                    break
+                            
+                            if prev_user_msg:
+                                feedback_ref = db.collection('feedback').document(f"wrong_{idx}_{int(time.time())}")
+                                feedback_ref.set({
+                                    "type": "incorrect_response",
+                                    "user_query": prev_user_msg,
+                                    "ai_response": message["content"],
+                                    "timestamp": time.time()
+                                })
+                                logger.info(f"Stored incorrect response feedback for: {prev_user_msg[:50]}")
+                    except Exception as e:
+                        logger.debug(f"Could not store feedback: {e}")
 
 # 3. Handle new input
 if prompt := st.chat_input("Ask a question..."):
@@ -100,8 +137,34 @@ if prompt := st.chat_input("Ask a question..."):
 
         if answer:
             st.markdown(answer)
-            st.session_state.messages.append({"role": "assistant", "content": answer})
+            st.session_state.messages.append({"role": "assistant", "content": answer, "feedback": None})
+            
+            # Add feedback buttons for new response
+            cols = st.columns([1, 0.1, 0.1])
+            with cols[1]:
+                if st.button("✓", key=f"feedback_correct_{len(st.session_state.messages)-1}", help="Response was correct"):
+                    st.toast("Thanks for the feedback! ✓", icon="✅")
+                    st.session_state.messages[-1]["feedback"] = "correct"
+            with cols[2]:
+                if st.button("✗", key=f"feedback_wrong_{len(st.session_state.messages)-1}", help="Response was wrong"):
+                    st.toast("Thanks for the feedback! We'll learn from this.", icon="❌")
+                    st.session_state.messages[-1]["feedback"] = "wrong"
+                    
+                    # Store wrong answer feedback to Firestore for learning
+                    try:
+                        from brain import db
+                        if db:
+                            feedback_ref = db.collection('feedback').document(f"wrong_{len(st.session_state.messages)-1}_{int(time.time())}")
+                            feedback_ref.set({
+                                "type": "incorrect_response",
+                                "user_query": prompt,
+                                "ai_response": answer,
+                                "timestamp": time.time()
+                            })
+                            logger.info(f"Stored incorrect response feedback for: {prompt[:50]}")
+                    except Exception as e:
+                        logger.debug(f"Could not store feedback: {e}")
         else:
             msg = "I don't have a response. Please try again."
             st.markdown(msg)
-            st.session_state.messages.append({"role": "assistant", "content": msg})
+            st.session_state.messages.append({"role": "assistant", "content": msg, "feedback": None})
