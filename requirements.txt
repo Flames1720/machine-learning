@@ -1,6 +1,5 @@
-streamlit
-firebase-admin
-google-genai
+streamlit>=1.28.0
+firebase-admin>=6.0.0
+google-genai>=0.3.0
 spacy>=3.7.0,<3.8.0
-https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl#egg=en_core_web_sm
-groq
+groq>=0.4.0

@@ -21,11 +21,25 @@ HAS_DIFFLIB = True
 
 @st.cache_resource
 def load_spacy_model():
-    """Loads the spaCy model and caches it."""
+    """Loads the spaCy model and caches it. Downloads if needed."""
     try:
         nlp = spacy.load("en_core_web_sm")
         logger.info("spaCy model loaded.")
         return nlp
+    except OSError:
+        # Model not found, try to download it
+        logger.info("spaCy model not found. Attempting to download...")
+        try:
+            import subprocess
+            subprocess.check_call([
+                "python", "-m", "spacy", "download", "en_core_web_sm"
+            ])
+            nlp = spacy.load("en_core_web_sm")
+            logger.info("spaCy model downloaded and loaded successfully.")
+            return nlp
+        except Exception as e:
+            logger.critical(f"Failed to download and load spaCy model: {e}", exc_info=True)
+            return None
     except Exception as e:
         logger.critical(f"Failed to load spaCy model: {e}", exc_info=True)
         return None
