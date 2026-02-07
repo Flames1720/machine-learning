@@ -1,3 +1,3 @@
 #!/bin/sh
 source .venv/bin/activate
-streamlit run streamlit_app.py --server.port 8080
+gunicorn --bind 0.0.0.0:8080 app:app

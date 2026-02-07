@@ -1,37 +1,69 @@
+# researcher.py
 import logging
-from duckduckgo_search import DDGS
-from brain import db, detect_and_log_unknown_words
+from ddgs import DDGS
 
 # Get a logger for this module
 logger = logging.getLogger(__name__)
 
-def research_new_concept(word):
-    logger.info(f"RESEARCHER: Starting research for new concept: '{word}'")
-    if not db:
-        logger.error("RESEARCHER: Firestore is not initialized. Aborting research.")
-        return
+def quick_research(concept: str) -> str:
+    """Performs a quick web search for a concept and returns the raw text.
 
+    Args:
+        concept: The concept to research.
+
+    Returns:
+        A string containing the concatenated search results, or an empty string if it fails.
+    """
+    logger.info(f"RESEARCHER: Starting quick research for: '{concept}'")
     try:
         with DDGS() as ddgs:
-            query = f"what are topics related to {word}"
-            logger.info(f"RESEARCHER: Performing DuckDuckGo search with query: '{query}'")
+            query = f"what is {concept}"
+            logger.info(f"RESEARCHER: Performing search with query: '{query}'")
             results = list(ddgs.text(query, max_results=5))
 
         if not results:
-            logger.warning(f"RESEARCHER: No search results found for '{word}'.")
-            return
+            logger.warning(f"RESEARCHER: No search results found for '{concept}'.")
+            return ""
 
-        logger.info(f"RESEARCHER: Found {len(results)} search results. Analyzing for new concepts.")
-        full_text = " ".join([r['body'] for r in results])
-
-        # Use the brain module to find and log any new words from the research material
-        if full_text:
-            detect_and_log_unknown_words(full_text)
-        else:
-            logger.info("RESEARCHER: Search results were empty, nothing to analyze.")
-
-        # The `detect_and_log_unknown_words` function will log its own detailed progress.
-        logger.info(f"RESEARCHER: Finished research for '{word}'. Any new concepts were sent to the brain.")
+        context = " ".join([r['body'] for r in results])
+        logger.info(f"RESEARCHER: Found {len(results)} search results.")
+        return context
 
     except Exception as e:
-        logger.critical(f"RESEARCHER: An unexpected error occurred during research for '{word}': {e}", exc_info=True)
+        logger.critical(f"RESEARCHER: An unexpected error occurred during quick research for '{concept}': {e}", exc_info=True)
+        return ""
+
+
+def research_new_concept(word: str, llm_client) -> str:
+    """Researches a new concept using web search and an LLM for deep analysis.
+
+    Args:
+        word: The word or concept to research.
+        llm_client: An instance of a generative AI model client (e.g., Gemini).
+
+    Returns:
+        A string containing the synthesized explanation of the concept, or an empty string if research fails.
+    """
+    logger.info(f"RESEARCHER: Starting deep research for new concept: '{word}'")
+    context = quick_research(word)
+
+    if not context:
+        return ""
+
+    # Use the LLM to generate a final, clean explanation
+    if llm_client:
+        logger.info("RESEARCHER: Synthesizing with LLM.")
+        prompt = f"Based on the following information, provide a concise and clear explanation of the term '{word}'. Do not start with introductory phrases like 'Based on the information provided...'. Just give the explanation directly. Information: \n\n{context}"
+        
+        try:
+            response = llm_client.generate_content(prompt)
+            explanation = response.text
+            logger.info(f"RESEARCHER: Successfully synthesized explanation for '{word}'.")
+            return explanation
+        except Exception as e:
+            logger.critical(f"RESEARCHER: LLM synthesis failed for '{word}': {e}", exc_info=True)
+            return ""
+    else:
+        logger.warning("RESEARCHER: LLM client is not available. Cannot synthesize explanation.")
+        # Fallback to returning raw context if no LLM is present
+        return context
