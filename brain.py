@@ -28,7 +28,20 @@ if not firebase_admin._apps:
         firebase_creds_json = os.environ.get('FIREBASE_CREDENTIALS')
         if not firebase_creds_json:
             raise ValueError("The FIREBASE_CREDENTIALS environment variable is not set.")
-        creds_dict = json.loads(firebase_creds_json)
+
+        # Some .env setups wrap the JSON in single or double quotes; strip them if present.
+        if (firebase_creds_json.startswith("'") and firebase_creds_json.endswith("'")) or (
+            firebase_creds_json.startswith('"') and firebase_creds_json.endswith('"')
+        ):
+            firebase_creds_json = firebase_creds_json[1:-1]
+
+        # Try to parse JSON. If newlines were escaped, convert them and retry.
+        try:
+            creds_dict = json.loads(firebase_creds_json)
+        except Exception:
+            firebase_creds_json = firebase_creds_json.replace('\\n', '\n')
+            creds_dict = json.loads(firebase_creds_json)
+
         cred = credentials.Certificate(creds_dict)
         project_id = creds_dict.get('project_id')
         firebase_admin.initialize_app(cred, {'projectId': project_id})
