@@ -66,22 +66,14 @@ def _initialize_groq():
         return None
 
 def _load_spacy_model():
-    """Loads the spaCy model. Downloads it if not found."""
+    """Loads the spaCy model, assuming it's pre-installed."""
     try:
         nlp = spacy.load(APP_CONFIG.SPACY_MODEL)
-        logger.info(f"spaCy model '{APP_CONFIG.SPACY_MODEL}' loaded.")
+        logger.info(f"spaCy model '{APP_CONFIG.SPACY_MODEL}' loaded successfully.")
         return nlp
-    except OSError:
-        logger.warning(f"spaCy model '{APP_CONFIG.SPACY_MODEL}' not found. Attempting download...")
-        try:
-            from spacy.cli import download
-            download(APP_CONFIG.SPACY_MODEL)
-            nlp = spacy.load(APP_CONFIG.SPACY_MODEL)
-            logger.info(f"spaCy model '{APP_CONFIG.SPACY_MODEL}' downloaded and loaded successfully.")
-            return nlp
-        except Exception as e:
-            logger.critical(f"Failed to download and load spaCy model: {e}", exc_info=True)
-            return None
+    except Exception as e:
+        logger.critical(f"Failed to load spaCy model '{APP_CONFIG.SPACY_MODEL}'. Ensure it's installed via requirements.txt. Error: {e}", exc_info=True)
+        return None
 
 # --- Initialize and Expose Services ---
 db = _initialize_firebase()
